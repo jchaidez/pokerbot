@@ -72,6 +72,33 @@ class Player:
 
     #Executes main logic and performs relevant action
     def play(self, data):
+        #Parses data string into dictionary d
+        d = self.parse_action(data)
+        #Identifies discard phase or betting phase
+        if d['legalActions'] == ['DISCARD']: return self.discard(**d)
+        else: return self.bet(**d)
+
+    #Parses data list into data dictionary
+    def parse_action(self, data):
+        #Computes position of end of boardCards list
+        a = data[2] + 3
+        #Computes position of end of lastActions list
+        b = a + data[a] + 1
+        #Initializes the return dictionary and populates it
+        d = {}
+        d['potSize'] = data[1]
+        d['boardCards'] = data[3:a]
+        d['lastActions'] = data[a+1:b]
+        d['legalActions'] = data[b+1:-1]
+        d['timebank'] = data[-1]
+        return d
+
+    #Computes correct card to discard
+    def discard(self, potSize, boardCards, lastActions, legalActions):
+        pass
+
+    #Computes correct bet
+    def bet(self, potSize, boardCards, lastActions, legalActions):
         pass
 
     #Executes end hand procedure
