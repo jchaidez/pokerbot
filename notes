@@ -1,0 +1,46 @@
+==Poker Notes==
+
+=Lecture 3: Poker Strategy=
+
+I. Play some percent of best hands (like 60 - 80 percent)
+  - Compute table of rankings of hands to beget "percentile" of hand, and decide whether or not to play
+II. When you are dealer ("have the button", "big blind"), play more. When you are not, play considerably less.
+III. Large raising vs small raising:
+  - Raising too big denys opponents ability to call profitability
+  - Large sizing good for tight range (if you only play top 50 percent, instead of top 80)
+  - Raising too low isn't as risky, but gives opponent better caacity to bet
+IV. Implied Odds: Look this up!
+  - Better chances based on extra information besides equity calculation
+  - General principles:
+    - Positive factor when you're on the button
+    - Negative factor otherwise
+V. Discarding well:
+  - Computing best decision is hard when close
+  - Usually won't be close
+  - Solution seems to be opponent modeling
+  - Make sure your behavior is consistent
+  - Consider the odds against another good draw
+
+
+BETTING LOGIC
+
+1. Bet or Fold?
+  a. if equity < equity_threshold(est_opponent_equity_threshold(),opp_bet_to_equity_function(),betting_round, random_num):
+     FOLD
+     - ideas for equity_threshold function:
+       - equity_threshold ~ betting_round^x, or logarithmic? x > 0
+       - equity_threshold ~ opponent_folding^x, x < 0
+     - ideas for est_opponent_equity_threshold function:
+       - est_opponent_equity_threshold(opponent_folding, hand_histories)
+       - if hand_histories = []:
+          - opponent_equity_threshold = opponent_folding_frequency
+          - equity_threshold(min equity for all hands in hand_history)
+  b. else, move to betting phase
+3. How much to bet?
+  a. bet(equity,est_opponent_bet_function,betting_round,random_num)
+     - ideas for est_opponent_bet_function
+       - est_opp_equity_to_bet_function(hand_histories, opponent_bet_histories)
+       - use scipy to do linear regression on the point set (hand.equity,hand.last_bet)
+       - inverse is opp_bet_to_equity_function()
+  a. randomized function search:
+ 
