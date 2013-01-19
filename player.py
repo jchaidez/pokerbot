@@ -8,9 +8,9 @@ import socket
 import sys
 
 from pbots_calc import calc
-from random import random
+from random import random, randint
 
-from numpy import polyfit
+from numpy import polyfit, polyval, asscalar, float32
 
 from json import loads, dumps
 json_loads, json_dumps = loads, dumps
@@ -65,7 +65,7 @@ class Opponent:
         #Initializes polynomial library data structure
         self.e_to_b_lib = self.init_lib()
         self.b_to_e_lib = self.init_lib()
-        self.equity_floor_lib = self.init_lib(INIT_B_FLOOR, INIT_N_FLOOR)
+        self.equity_floor_lib = self.init_eq_lib(INIT_B_FLOOR, INIT_N_FLOOR)
         
         #Calculates 
         self.redetermine_libs()
@@ -88,9 +88,10 @@ class Opponent:
     def init_history(self):
         d = {}
         d[True], d[False] = [], []
+        #We add these initial values to stabilize the initial polynomial as a near straight line.
         for i in xrange(4):
-            d[True].append({'bet':[0,1],'equity':[0,1]})
-            d[False].append({'bet':[0,1],'equity':[0,1]})
+            d[True].append({'bet':[0,.001,.002,.998,.999,1],'equity':[0,.001,.002,.998,.999,1]})
+            d[False].append({'bet':[0,.001,.002,.998,.999,1],'equity':[0,.001,.002,.998,.999,1]})
         return d
     
     #Constructor for library dictionaries
@@ -100,7 +101,7 @@ class Opponent:
         return d
 
     #Constructor for library dictionaries
-    def init_eq_lib(self):
+    def init_eq_lib(self,i,j):
         d = {}
         d[True], d[False] = [i,i,i,i], [j,j,j,j]
         return d
@@ -133,8 +134,8 @@ class Opponent:
     #determine 
     def add_hand_data_pt(self, hand, board, bet_seq, button):
         #LOCAL MACROS#
-        CALC_ITERS = 10000
-        POLY_DEGREE = 5
+        CALC_ITERS = 1000
+        POLY_DEGREE = 1
 
         #MAIN CODE#
         #Makes hand inut for equity calculation
@@ -149,44 +150,59 @@ class Opponent:
             if i == 0: b = ''
             else: b = self.to_str(board[:3+i])
             d = ''
-            e = calc(h,b,d,CALC_ITERS)
+            e = calc(h,b,d,CALC_ITERS).ev[0]
             self.play_history[button][i]['equity'].append(e)
+            #print '_____'
+            #print 'PLAY_HISTORY', i, button, self.play_history[button][i]
+            #print '_____'
 
             #Performs polynomial regression to determine the equity to bet function and a bet to equity function
-            self.e_to_b_lib[button][i] = \
-            polyfit(self.play_history[button][i]['equity'], self.play_history[button][i]['bet'], POLY_DEGREE)
-
-            self.b_to_e_lib[button][i] = \
-            polyfit(self.play_history[button][i]['bet'], self.play_history[button][i]['equity'], POLY_DEGREE)
+            l1 = polyfit(self.play_history[button][i]['equity'], self.play_history[button][i]['bet'], POLY_DEGREE)
+            for k in range(POLY_DEGREE + 1): l1[k] = float(l1[k])
+            self.e_to_b_lib[button][i] = l1
+            
+            l2 = polyfit(self.play_history[button][i]['bet'], self.play_history[button][i]['equity'], POLY_DEGREE)
+            for k in range(POLY_DEGREE + 1): l2[k] = float(l2[k])
+            self.b_to_e_lib[button][i] = l2
 
             #Checks to see if equity threshold should change based on new betting evidence.
             if e < self.equity_floor_lib[button][i]: self.equity_floor_lib[button][i] = e
 
     #Recalculates the polynomial functions based on current play history
     def redetermine_libs(self):
+        #LOCAL MACROS#
+        
+        POLY_DEGREE = 1
+        
+        #MAIN CODE#
         for i in [True, False]:
             for j in xrange(0,4):
             
                 #Performs polynomial regression to determine the equity to bet function and a bet to equity function
-                self.e_to_b_lib[button][i] = \
-                polyfit(self.play_history[i][j]['equity'], self.play_history[button][i]['bet'], POLY_DEGREE)
+                self.e_to_b_lib[i][j] = \
+                polyfit(self.play_history[i][j]['equity'], self.play_history[i][j]['bet'], POLY_DEGREE)
             
-                self.b_to_e_lib[button][i] = \
-                polyfit(self.play_history[i][j]['bet'], self.play_history[button][i]['equity'], POLY_DEGREE)
+                self.b_to_e_lib[i][j] = \
+                polyfit(self.play_history[i][j]['bet'], self.play_history[i][j]['equity'], POLY_DEGREE)
                     
     #Gets estimated opponent bet amount given equity, button and betting round.
     def get_bet_amount(self, equity, round, button):
-        r = 0
-        p = self.e_to_b_lib[button][round]
-        for i in range(len(p)): r += p[-i - 1] * (equity ** i)
-        return r
 
+        k, d = 0, len(self.b_to_e_lib[button][round])
+        for i in xrange(d):
+            k += float(self.e_to_b_lib[button][round][i]) * (equity ** (d - i - 1))
+        #print '**POLY_E_TO_B**', k
+        return k
+    
     #Gets estimated opponent equity given bet amount, button and betting round.
     def get_equity(self, bet, round, button):
-        r = 0
-        p = self.b_to_e_lib[button][round]
-        for i in range(len(p)): r += p[-i - 1] * (bet ** i)
-        return r
+        
+        #print 'poly used:', self.b_to_e_lib[button][round]
+        k, d = 0, len(self.b_to_e_lib[button][round])
+        for i in xrange(d):
+            k += float(self.b_to_e_lib[button][round][i]) * (bet ** (d - i - 1))
+        #print '**POLY_B_TO_E**', k
+        return k
 
     #Gets estimated opponent equity threshold given round and button
     def get_equity_threshold(self, round, button):
@@ -225,6 +241,10 @@ class Opponent:
 
     #END OF FOLDING FREQUENCY AND PROCESSING#
 
+    def get_polys(self, round, button):
+        return self.e_to_b_lib[button][round], self.b_to_e_lib[button][round]
+
+
 #END OF OPPONENT CLASS
 
 #PLAYER CLASS#
@@ -252,10 +272,10 @@ class Player:
     
     #Utility functions for normalizing and denormalizing value of total bet (to make it fraction of entire stack)
     def normalize_bet(self, bet):
-        return bet / self.stackSize
+        return float(bet) / float(self.stackSize * self.bigBlind)
     
     def denormalize_bet(self, bet):
-        return round(bet * self.stackSize)
+        return round(bet * self.stackSize  * self.bigBlind)
     
     #END CLASS UTILITIES#
     
@@ -265,6 +285,7 @@ class Player:
         # Using this ensures that you get exactly one packet per read.
         self.socket = input_socket
         f_in = self.socket.makefile()
+        print 'run socket success'
         while True:
             # Block until the engine sends us a packet.
             input_str = f_in.readline()
@@ -338,7 +359,8 @@ class Player:
     
     #Executes hand initialization procedure
     def init_hand(self, command, handId, button, holeCard1, holeCard2, holeCard3, yourBank, oppBank, timeBank):
-        self.handId, self.button, self.bank, self.oppBank, self.timeBank = handId, button, yourBank, oppBank, timeBank
+        self.handId, self.button = int(handId), bool(button)
+        self.bank, self.oppBank, self.timeBank = int(yourBank), int(oppBank), float(timeBank)
         self.holeCards = set([holeCard1, holeCard2, holeCard3])
         self.deck = DECK.copy()
         for c in self.holeCards: self.deck.remove(c)
@@ -349,6 +371,9 @@ class Player:
     
         #Resets bet sequence of opponent model
         self.opponent.reset_bet_sequence()
+    
+        print '+++++++++++++++++++'
+        print '++begin hand:', self.handId, self.timeBank, '++'
 
     #END OF HAND INITIALIZATION METHOD SECTION#
     
@@ -358,10 +383,17 @@ class Player:
     
     #Executes main logic and performs relevant action
     def play(self, data):
+        #FUNCTION MACROS#
+        REAL_PLAY_THRESHOLD = 30
+        
+        #MAIN CODE#
+        
         #Parses data string into dictionary d
         d = self.parse_getcommand(data)
         #Identifies discard phase or betting phase
         if 'DISCARD' in d['legalActions']: return self.discard(**d)
+        #else:
+            #if self.handId <= 30: return self.random_bet(**d)
         else: return self.bet(**d)
 
     #Parses getcommand data list into data dictionary
@@ -372,21 +404,22 @@ class Player:
         b = a + int(data[a]) + 1
         #Initializes the return dictionary and populates it
         d = {}
-        d['potSize'] = data[1]
+        d['potSize'] = int(data[1])
         d['boardCards'] = data[3:a]
         d['lastActions'] = data[a+1:b]
         d['legalActions'] = data[b+1:-1]
-        d['timebank'] = data[-1]
+        d['timeBank'] = float(data[-1])
         return d
-
+    
     #Computes correct card to discard
-    def discard(self, potSize, boardCards, lastActions, legalActions, timebank):
+    def discard(self, potSize, boardCards, lastActions, legalActions, timeBank):
         #LOCAL MACROS#
-        CALC_ITERS = 100000
+        CALC_ITERS = 1000
         
         #MAIN CODE#
         #Seeks to keep the cards that afford the maximum equity against an arbitrary pair of cards
         #by computing the equity of 2 card subsets of hand
+        print 'time:', timeBank
         v, l, discard = 0, list(self.holeCards), None
         for i in xrange(3):
             j = (i + 1) % 3
@@ -397,37 +430,47 @@ class Player:
             c = calc(h,b,d,CALC_ITERS)
             if c.ev[0] > v:
                 discard = l[k]
-        self.holdCards.remove(discard)
+        self.holeCards.remove(discard)
         self.discards.add(discard)
         return 'DISCARD:' + discard
 
     #BET DETERMINATION METHOD SECTION#
     #This section contains methods used to determine whether to fold and how much to bet#
-            
+    
+    #Random bet function determines betting randomly
+    #def random_bet(self, potSize, boardCards, lastActions, legalActions, timeBank):
+        #pass
+        
+    
     #Computes correct bet (at the moment using only equity)
-    def bet(self, potSize, boardCards, lastActions, legalActions, timebank):
+    def bet(self, potSize, boardCards, lastActions, legalActions, timeBank):
         #LOCAL MACROS#
-        CALC_ITERS = 50000
+        CALC_ITERS = 1000
         
         #MAIN CODE#
         #Initial equity calculation
-        hole_cards_str = self.holeCards + ':xxx'
+        hole_cards_str = self.to_str(self.holeCards) + ':xxx'
         board_cards_str = self.to_str(boardCards)
         discard_str = self.to_str(self.discards)
-        e = calc(hole_cards_str, board_cards_str, discard_str, CALC_ITERS).ev
+        e = calc(hole_cards_str, board_cards_str, discard_str, CALC_ITERS).ev[0]
                  
         #Gathers variables for input into threshold and bet functions
-        opponent = self.opponent_model
+        opponent = self.opponent
         button = self.button
         if len(boardCards) == 0: betting_round = 0
         else: betting_round = len(boardCards) - 2
+        current_bet = self.normalize_bet(self.current_bet)
         r1, r2 = random(), random()
         
+        print 'time:', timeBank
+        print 'betting round:', betting_round
+        print 'your_equity', e
+        
         #Updates current opponent bet
-        opponent.update_bet_sequence(lastActions, self.current_bet, betting_round)
+        opponent.update_bet_sequence(potSize, self.current_bet, betting_round)
         
         #Applies threshold function
-        if e < self.threshold_function(opponent, button, betting_round, r1):
+        if e < self.threshold_function(opponent, self.current_bet, button, betting_round, r1):
             return self.try_fold(legalActions)
         #If threshold is met, makes bet  
         else:
@@ -435,7 +478,10 @@ class Player:
             return self.try_bet(bet_amount, potSize, legalActions)
 
     #Tries to bet a certain amount
-    def try_bet(new_amount, potSize, legalActions):
+    def try_bet(self, new_amount, potSize, legalActions):
+        print '________'
+        print 'legalActions:', legalActions
+        print '________'
                  
         #Ensures that bet is not above stack size or below big blind
         if self.current_bet - new_amount < self.bigBlind: new_amount = self.current_bet
@@ -443,35 +489,43 @@ class Player:
         
         #If new amount is too low, tries to perform checks and calls
         if new_amount <= self.current_bet:
-            if 'CHECK' in legal_actions: return 'CHECK'
-            elif 'CALL' in legalActions: return 'CALL'
+            if 'CHECK' in legalActions: action = 'CHECK'
+            elif 'CALL' in legalActions: action = 'CALL'
         #Otherwise, tries to implement bet to the level intended, if possible.
         else:
-            if 'BET' in legalActions: return 'BET:' + str(new_amount - self.current_bet)
-            elif 'RAISE' in legalActions: return 'RAISE:' + str(potSize + new_amount - self.current_bet)
-            elif 'CALL' in legalActions: return 'CALL'
-            elif 'CHECK' in legalActions: return 'CHECK'
-            self.current_bet = new_amount
+            if 'BET' in legalActions:
+                self.current_bet = new_amount
+                action = 'BET:' + str(new_amount - self.current_bet)
+            elif 'RAISE' in legalActions:
+                self.current_bet = new_amount
+                action = 'RAISE:' + str(potSize + new_amount - self.current_bet)
+            elif 'CALL' in legalActions: action = 'CALL'
+            elif 'CHECK' in legalActions: action = 'CHECK'
+        return action
                  
     #Tries to fold by taking the next best option if fold cannot be performed.
     def try_fold(self, legalActions):
-        if 'FOLD' in legalActions: return 'FOLD'
-        elif 'CHECK' in legalActions: return 'CHECK'
-        elif 'CALL' in legalActions: return 'CALL'
-        else: return 'BET:' + str(self.bigBlind)
+        print '________'
+        print 'legalActions:', legalActions
+        print '________'
+        if 'FOLD' in legalActions: action = 'FOLD'
+        elif 'CHECK' in legalActions: action = 'CHECK'
+        elif 'CALL' in legalActions: action = 'CALL'
+        else: action = 'BET:' + str(self.bigBlind)
+        return action
                  
     #Outputs lowest acceptable equity given current situation
-    def threshold_function(self, opp, opp_bet, self_button, round, r):
+    def threshold_function(self, opp, current_bet, self_button, round, r):
         
         #LOCAL MACROS#
-        A = 1
+        A = .2
         B = .1
-        C = .1
-        D = .5
-        E = -.5
+        C = .3
+        D = .05
+        E = .05
         F = .2
         G = .01
-        H = .2
+        #H = .1
         
         #MAIN CODE#
                  
@@ -479,16 +533,31 @@ class Player:
         opp_button = not self_button #1
         opp_thresh = opp.get_equity_threshold(round, opp_button) #2
         
-        opp_bet = self.normalize_bet(opp.get_current_bet(betting_round))
-        opp_equity = opp.get_equity_amount(opp_bet, round, opp_button) #3
+        opp_bet = self.normalize_bet(opp.get_current_bet(round))
+        print '**opp_bet**', opp_bet
+        opp_equity = opp.get_equity(opp_bet, round, opp_button) #3
         
         opp_fold_freq = opp.get_folding_frequency() #4
         #Variables round and r (random variable in range 0-1) are metric variables 5 and 6 respectively
     
         #Actual calculation takes place here
-        return (A + (B * round)) * ((C * opp_thresh) + (D * (opp_equity ** 2)))\
+        threshold = min(A, 1 - opp_fold_freq) + (B * r) + (C * (1 - opp_fold_freq)) + (D * opp_button)\
+                     + (E * ((opp_equity / (round + 1)) ** 2)) + (F * opp_thresh) + (G * current_bet)
+
+        ''' 
+        OLD THRESHOLD FUNCTION
+        threshold = float((A + (B * round)) * ((C * opp_thresh) + (D * (opp_equity ** 2)))\
              + (A - (B * round)) * ((F * opp_button)  + (E * (opp_fold_freq ** 2)))\
-             + (G * r) + H
+             + (G * r) + H)
+        '''
+
+        #print opp.get_polys(round, self_button)
+        print 'opp_bet', opp.get_current_bet(round), self.normalize_bet(opp.get_current_bet(round))
+        print 'round:', round, 'button:', self_button, 'random:', r
+        print 'opp_threshold:', opp_thresh, 'opp_equity:', opp_equity, 'opp_fold_freq', opp_fold_freq
+        print 'fold threshold:', threshold
+        print '======'
+        return threshold
     
     
     #Outputs amount that should be bet given current situation
@@ -506,14 +575,21 @@ class Player:
         
         #Gathering important data for actual metric function (variables numbered and lettered below)
         opp_button = not self_button #1
-        opp_real_bet = self.normalize_bet(opp.get_current_bet(betting_round))
-        opp_equity = opp.get_equity_amount(opp_real_bet, round, opp_button) #2
-        opp_rvrs_bet = opp.get_bet_amount(equity, round, button) #3
+        opp_real_bet = self.normalize_bet(opp.get_current_bet(round))
+        opp_equity = opp.get_equity(opp_real_bet, round, opp_button) #2
+        opp_rvrs_bet = opp.get_bet_amount(equity, round, self_button) #3
         #Variables equity, round and r (random variable in range 0-1) are metric variables 4, 5 and 6 respectively
     
         #Actual calculation takes place here
-        return (A + (B * (round + 1))) * ((C * (equity - opp_equity)) + (D * opp_rvrs_bet))\
-             + (E * (button - .5) / (round + 1)) + (F * (r - .5))
+        bet_amount  = float((A + (B * (round + 1))) * ((C * (equity - opp_equity)) + (D * opp_rvrs_bet))\
+             + (E * (self_button - .5) / (round + 1)) + (F * (r - .5)))
+        print opp.get_polys(round, self_button)
+        print 'opp_bet', opp.get_current_bet(round), opp_real_bet
+        print 'round:', round, 'button:', self_button, 'random:', r
+        print 'opp_equity:', opp_equity, 'opp_rvrs_bet:', opp_rvrs_bet
+        print 'bet_amount:', bet_amount
+        print '======'
+        return bet_amount
                  
     #END OF BET DETERMINATION METHOD SECTION#
 
@@ -537,15 +613,19 @@ class Player:
                     h = c1 + c2
                     b = d['boardCards']
                     opp_bet_seq = []
-                    for b in self.opponent.get_bet_sequence():
-                        opp_bet_seq.append(self.normalize_bet(b))
+                    for x in self.opponent.get_bet_sequence():
+                        opp_bet_seq.append(self.normalize_bet(x))
 
                     #Normalizes bets to account for current 
                     opp_button = not self.button
                     self.opponent.add_hand_data_pt(h, b, opp_bet_seq, opp_button)
         l2 = self.find_actions(d['lastActions'],'FOLD')
-        opp_folded = (l2 and l2[0].split(':')[1] == self.opponent.name)
-        self.opponent.update_fold_frequency(opp_folded)
+        opp_folded = (len(l2) and l2[0].split(':')[1] == self.opponent.name)
+        self.opponent.update_folding_frequency(opp_folded)
+        
+        #print self.find_actions(d['lastActions'],'FOLD')
+        #print self.find_actions(d['lastActions'],'WIN')
+        print '++end hand++', self.timeBank
 
     #Parses handover data list into data dictionary
     def parse_handover(self, data):
@@ -553,11 +633,11 @@ class Player:
         a = int(data[3]) + 4
         #Initializes the return dictionary and populates it
         d = {}
-        d['yourBank'] = data[1]
-        d['oppBank'] = data[2]
+        d['yourBank'] = int(data[1])
+        d['oppBank'] = int(data[2])
         d['boardCards'] = data[4:a]
         d['lastActions'] = data[a+1:-1]
-        d['timeBank'] = data[-1]
+        d['timeBank'] = float(data[-1])
         return d
 
     #END OF PLAY METHOD SECTION#
